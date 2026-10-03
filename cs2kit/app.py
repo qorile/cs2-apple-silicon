@@ -18,6 +18,27 @@ from typing import Any, Dict, Optional
 from cs2kit import recipe as recipe_mod
 from cs2kit.util import EXIT_OK, emit_error, repo_root, wineprefix
 
+def _as_str(value: object) -> str:
+    return str(value)
+
+
+def _shell_quote(value: object) -> str:
+    import shlex
+
+    return shlex.quote(_as_str(value))
+
+
+def _applescript_quote(value: object) -> str:
+    """Escape a value for use inside an AppleScript double-quoted string."""
+    return _as_str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _xml_quote(value: object) -> str:
+    """Escape a value for use inside a plist XML text node."""
+    return (_as_str(value).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
 APPLESCRIPT = '''set repoPath to "{repo}"
 set winePrefix to "{prefix}"
 set profileName to "{profile}"
@@ -31,13 +52,16 @@ do shell script "cd " & quoted form of repoPath & " && CS2KIT_REPO=" & quoted fo
 
 #: Fallback for a machine without osacompile: a plain script bundle. It works,
 #: but LaunchServices is fussier about it (see docs/troubleshooting.md #25d).
+#: Values are inserted pre-quoted with shlex.quote - the profile name and paths
+#: come from a YAML file (or the command line) and must not be able to break
+#: out of the generated script.
 LAUNCHER = r'''#!/bin/bash
 set -uo pipefail
-export CS2KIT_REPO="{repo}"
-export WINEPREFIX="{prefix}"
+export CS2KIT_REPO={repo}
+export WINEPREFIX={prefix}
 LOG="$HOME/CS2/cs2kit-app.log"
 mkdir -p "$(dirname "$LOG")"
-"$CS2KIT_REPO/bin/cs2kit" play --profile "{profile}" --gui --detach >>"$LOG" 2>&1
+"$CS2KIT_REPO/bin/cs2kit" play --profile {profile} --gui --detach >>"$LOG" 2>&1
 exit 0
 '''
 
@@ -73,7 +97,9 @@ def _compile_applet(dest: Path, prefix: Path, profile: str) -> Optional[str]:
     osacompile = shutil.which("osacompile")
     if not osacompile:
         return None
-    script = APPLESCRIPT.format(repo=str(repo_root()), prefix=str(prefix), profile=profile)
+    script = APPLESCRIPT.format(repo=_applescript_quote(repo_root()),
+                                 prefix=_applescript_quote(prefix),
+                                 profile=_applescript_quote(profile))
     if dest.exists():
         shutil.rmtree(dest)
     proc = subprocess.run([osacompile, "-o", str(dest), "-e", script],
@@ -91,10 +117,13 @@ def _write_script_app(dest: Path, prefix: Path, profile: str, name: str) -> str:
     macos.mkdir(parents=True, exist_ok=True)
     (dest / "Contents" / "Resources").mkdir(parents=True, exist_ok=True)
     target = macos / exe_name
-    target.write_text(LAUNCHER.format(repo=str(repo_root()), prefix=str(prefix), profile=profile))
+    target.write_text(LAUNCHER.format(repo=_shell_quote(repo_root()),
+                                      prefix=_shell_quote(prefix),
+                                      profile=_shell_quote(profile)))
     target.chmod(target.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     (dest / "Contents" / "Info.plist").write_text(PLIST.format(
-        name=name, ident=dest.stem.lower().replace(" ", "-"), version=__version__, exe=exe_name))
+        name=_xml_quote(name), ident=_xml_quote(dest.stem.lower().replace(" ", "-")),
+        version=__version__, exe=exe_name))
     (dest / "Contents" / "PkgInfo").write_text("APPL????")
     return "script"
 
