@@ -9,6 +9,7 @@ CS2Video.txt workaround. It never touches a game binary (T-021).
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -47,10 +48,14 @@ def render_env_script(rec: recipe_mod.Recipe) -> str:
     for key, value in sorted(rec.env.items()):
         # Values come from a YAML file anyone may have written; quote them so a
         # `"; <command>` inside a value stays inert when the script is sourced.
+        # $VAR references are expanded here (the way `play` expands them), not
+        # left for the shell: inside shlex's single quotes a literal $HOME would
+        # survive sourcing and `mkdir -p "$DXMT_SHADER_CACHE"` would create a
+        # directory literally named `$HOME`.
         if not key.isidentifier():
             raise recipe_mod.RecipeError(
                 f"env key {key!r} is not a valid shell variable name")
-        lines.append(f"export {key}={shlex.quote(str(value))}")
+        lines.append(f"export {key}={shlex.quote(os.path.expandvars(str(value)))}")
     if rec.launch_options:
         lines.append(f"export CS2KIT_LAUNCH_OPTIONS={shlex.quote(' '.join(rec.launch_options))}")
     if "DXMT_SHADER_CACHE" in rec.env:
